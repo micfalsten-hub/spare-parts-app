@@ -1,0 +1,19 @@
+{
+  "name": "تاجر قطع الغيار",
+  "short_name": "قطع الغيار",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f172a",
+  "lang": "ar",
+  "dir": "rtl",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

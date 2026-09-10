@@ -1,0 +1,7 @@
+// Phase 2 Google Apps Script backend (merge with your existing bound script)
+function doPost(e){try{const p=JSON.parse(e.postData.contents||'{}');let r;if(p.action==='addProduct')r=addProduct_(p.data);else if(p.action==='addSupplier')r=addSupplier_(p.data);else if(p.action==='addPurchase')r=addPurchase_(p.data);else throw new Error('Unknown action');return json_({ok:true,result:r})}catch(err){return json_({ok:false,error:String(err.message||err)})}}
+function addProduct_(d){const s=sheet_('Products',['Product_ID','Product_Name','Your_Price','Image_URL']);const id=d.id||('P'+Date.now());s.appendRow([id,d.name||'',Number(d.sellPrice||0),d.imageUrl||'']);return{id:id}}
+function addSupplier_(d){const s=sheet_('Suppliers',['Supplier_ID','Supplier_Name','Phone','WhatsApp','Address','Notes']);const id=d.id||('S'+Date.now());s.appendRow([id,d.name||'',d.phone||'',d.whatsapp||'',d.address||'',d.notes||'']);return{id:id}}
+function addPurchase_(d){const s=sheet_('Purchases',['Purchase_ID','Date','Product_ID','Supplier_ID','Purchase_Price','Sell_Price','Notes']);const id=d.id||('B'+Date.now());s.appendRow([id,d.date||new Date(),d.productId||'',d.supplierId||'',Number(d.price||0),Number(d.sellPrice||0),d.notes||'']);return{id:id}}
+function sheet_(n,h){const ss=SpreadsheetApp.getActiveSpreadsheet();let s=ss.getSheetByName(n);if(!s){s=ss.insertSheet(n);s.getRange(1,1,1,h.length).setValues([h]);s.setFrozenRows(1)}return s}
+function json_(o){return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON)}
