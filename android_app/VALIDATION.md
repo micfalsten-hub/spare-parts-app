@@ -1,7 +1,21 @@
-# Cloud validation
+# Validation of the delivered APK
 
-The Android workflow runs Flutter static analysis, the complete SQLite/widget/startup regression tests, release APK signature/version checks and a no-INTERNET manifest check. It then installs the same release APK on an Android API 24 emulator with Wi-Fi and mobile data disabled. Both first launch and a force-stop/relaunch must expose the Arabic home screen; the reported database error causes failure.
+Version 1.0.1 (2), package com.daftar.spare_parts.
+SHA-256: 9b9fc1726ab51c4735aa832ddfad528ca2539bba11cfe54bbd26a86eab59cdb7.
 
-The verified installer is uploaded only after all checks pass. Inspect the GitHub Actions run for the result; this document does not claim checks passed before that run completes. Android startup XML/screenshots/logcat are separate diagnostics artifacts. No user data or private signing keys are included.
+All 14 automated app tests and static analysis passed in run 37807029098.
+Release signature, package/version and no-INTERNET permission checks passed.
+That run's legacy Android 7 emulator preparation failed before launching the app.
 
-Camera, gallery/file chooser and WhatsApp integrations require a physical-phone check. No physical-device compatibility claim is made.
+Run 37840741140 downloaded the same APK and verified its checksum. It passed
+actual release first launch and force-stop/relaunch on Android 11, with airplane
+mode on, Wi-Fi disabled and no active default network. Fresh UI snapshots
+positively asserted the Arabic home screen after both launches.
+
+The APK was then published without rebuilding. Both runs used GitHub-hosted
+servers; no local toolchain was installed. Camera/gallery, file chooser and
+WhatsApp require a physical-phone check. Android 7 is supported by the declared
+minimum SDK but is not claimed to have passed native testing.
+
+The workflow's Android diagnostic artifact includes XML, screenshots, logcat
+and disconnected-network details. No user database or private signing key is included.
