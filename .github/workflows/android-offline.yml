@@ -80,6 +80,17 @@ jobs:
           cp "$apk" deliverables/Daftar-Parts-1.0.1.apk
           sha256sum deliverables/Daftar-Parts-1.0.1.apk > deliverables/SHA256.txt
           "$sdk_tools/apksigner" verify --print-certs "$apk" > deliverables/SIGNATURE.txt
+      - name: Upload compiled APK for diagnostics
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: compiled-apk-awaiting-android-verification
+          path: android_app/deliverables/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+      - name: Release build daemon memory before emulator
+        working-directory: android_app/android
+        run: ./gradlew --stop
       - name: Enable emulator acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -91,9 +102,9 @@ jobs:
           api-level: 24
           arch: x86_64
           target: default
-          ram-size: 2048M
+          ram-size: '4096'
           emulator-boot-timeout: 600
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          emulator-options: -no-window -gpu swiftshader_indirect -memory 4096 -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
           working-directory: android_app
           script: python3 ci/android_smoke.py
