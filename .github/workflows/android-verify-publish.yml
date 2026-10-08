@@ -1,0 +1,153 @@
+name: Verify and publish standalone Android APK
+on:
+  push:
+    branches: [codex/android-verify-publish]
+    paths: [.github/workflows/android-verify-publish.yml]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: verify-publish-daftar-1.0.1
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERIFIED_RUN_ID: '37807029098'
+      VERIFIED_SHA: '716032a60112d4d284eea026e3c301841006d307'
+      RELEASE_TAG: 'v1.0.1-cloud'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: '716032a60112d4d284eea026e3c301841006d307'
+          persist-credentials: false
+      - name: Require successful app tests and verified compilation
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$VERIFIED_RUN_ID" > build-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$VERIFIED_RUN_ID/jobs" > build-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/11562734706" > build-artifact.json
+          python3 - <<'PY'
+          import json, os
+          run = json.load(open("build-run.json"))
+          expected = {
+              "id": int(os.environ["VERIFIED_RUN_ID"]),
+              "status": "completed",
+              "head_sha": os.environ["VERIFIED_SHA"],
+              "head_branch": "codex/android-offline-build",
+              "path": ".github/workflows/android-offline.yml",
+              "run_attempt": 1,
+          }
+          for key, value in expected.items():
+              if run.get(key) != value:
+                  raise SystemExit(f"Unexpected build: {key}={run.get(key)!r}")
+          jobs = json.load(open("build-jobs.json"))["jobs"]
+          required = {"Resolve, analyze and test", "Build and verify APK", "Upload compiled APK for diagnostics"}
+          job = next(j for j in jobs if j["id"] == 113413878783)
+          success = {s["name"] for s in job["steps"] if s["conclusion"] == "success"}
+          if not required <= success:
+              raise SystemExit("App compilation or tests failed")
+          artifact = json.load(open("build-artifact.json"))
+          if artifact["id"] != 11562734706 or artifact["expired"] or artifact["name"] != "compiled-apk-awaiting-android-verification":
+              raise SystemExit("Wrong or expired compiled artifact")
+          if artifact["workflow_run"]["head_sha"] != os.environ["VERIFIED_SHA"]:
+              raise SystemExit("Artifact source mismatch")
+          print("14 app tests, signature, version and no-INTERNET checks passed in source build")
+          PY
+      - name: Download the same compiled APK and verify checksum
+        shell: bash
+        run: |
+          gh run download "$VERIFIED_RUN_ID" --repo "$GITHUB_REPOSITORY" --name compiled-apk-awaiting-android-verification --dir deliverables
+          sha256sum --check deliverables/SHA256.txt
+          mkdir -p android_app/build/app/outputs/flutter-apk
+          cp deliverables/Daftar-Parts-1.0.1.apk android_app/build/app/outputs/flutter-apk/app-release.apk
+          python3 -m py_compile android_app/ci/android_smoke.py
+      - name: Prepare fresh cloud Android tools with retries
+        shell: bash
+        run: |
+          df -h /
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export PATH="$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+          echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME/bin" >> "$GITHUB_PATH"
+          set +o pipefail
+          yes | sdkmanager --licenses >/dev/null
+          set -o pipefail
+          for attempt in 1 2 3; do
+            if sdkmanager --install emulator "platform-tools" "system-images;android-24;default;x86_64" "platforms;android-24" "build-tools;37.0.0"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            if [ "$(realpath "$ANDROID_HOME")" = "/usr/local/lib/android/sdk" ]; then
+              rm -rf -- "/usr/local/lib/android/sdk/.temp"
+            fi
+            sleep 5
+          done
+      - name: Enable emulator acceleration
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify release offline first launch and relaunch on Android 7
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 24
+          arch: x86_64
+          target: default
+          ram-size: '4096'
+          emulator-boot-timeout: 600
+          emulator-options: -no-window -gpu swiftshader_indirect -memory 4096 -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          working-directory: android_app
+          script: python3 ci/android_smoke.py
+      - name: Upload Android startup diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-startup-diagnostics
+          path: android_app/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload verified installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Daftar-Parts-1.0.1
+          path: deliverables/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Publish prerelease with the tested assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" > existing-tags.json
+          python3 - <<'PY'
+          import json, os
+          refs = json.load(open("existing-tags.json"))
+          target = "refs/tags/" + os.environ["RELEASE_TAG"]
+          if any(item["ref"] == target for item in refs):
+              raise SystemExit("Release tag already exists; inspect it before retrying")
+          PY
+          cat > release-notes.md <<EOF
+          دفتر القطع 1.0.1 — نسخة تجريبية جاهزة للتثبيت على Android 7 أو أحدث.
+
+          التطبيق مستقل: لا حساب، لا تسجيل دخول، ولا اتصال بالإنترنت مطلوب للاستخدام.
+          قاعدة SQLite والصور محفوظة على الهاتف. يشمل القطع والموردين والمشتريات
+          والبحث والأسعار والسجل ونسخة ZIP كاملة واستيراد وتصدير CSV.
+
+          نجح 14 اختبارًا آليًا، وتم تشغيل هذا الملف وإعادة فتحه دون اتصال على Android 7.
+          المصدر: $VERIFIED_SHA
+          بناء واختبارات التطبيق: https://github.com/$GITHUB_REPOSITORY/actions/runs/$VERIFIED_RUN_ID
+          اختبار Android دون اتصال: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          الملف موقّع بمفتاح تجريبي جديد. إذا كانت النسخة القديمة مثبتة،
+          احفظ نسخة احتياطية لأي بيانات تحتاجها قبل إزالة النسخة القديمة والتثبيت.
+
+          الكاميرا واختيار الملفات وواتساب تحتاج تجربة على هاتف فعلي.
+          EOF
+          gh release create "$RELEASE_TAG" deliverables/Daftar-Parts-1.0.1.apk deliverables/SHA256.txt deliverables/SIGNATURE.txt --repo "$GITHUB_REPOSITORY" --target "$VERIFIED_SHA" --draft --prerelease --title "دفتر القطع 1.0.1" --notes-file release-notes.md
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
