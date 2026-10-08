@@ -31,11 +31,18 @@ def diagnostics(label):
 
 
 def require_home(label):
-    for _ in range(15):
-        adb("shell", "uiautomator", "dump",
-            "/sdcard/daftar-smoke.xml", check=False)
-        latest = adb("shell", "cat", "/sdcard/daftar-smoke.xml",
-                     check=False).stdout
+    for attempt in range(15):
+        remote_xml = f"/sdcard/daftar-{label}-{attempt}.xml"
+        adb("shell", "rm", "-f", remote_xml)
+        dumped = adb("shell", "uiautomator", "dump", remote_xml, check=False)
+        if dumped.returncode != 0:
+            time.sleep(2)
+            continue
+        read = adb("shell", "cat", remote_xml, check=False)
+        if read.returncode != 0:
+            time.sleep(2)
+            continue
+        latest = read.stdout
         ARTIFACTS.joinpath(f"{label}.xml").write_bytes(latest)
         try:
             root = ET.fromstring(latest)
