@@ -1,0 +1,113 @@
+name: Build offline Android APK
+on:
+  push:
+    branches: [codex/android-offline-build]
+permissions:
+  contents: read
+concurrency:
+  group: android-offline-apk
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: android_app
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install pinned Flutter SDK
+        working-directory: .
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          version = "3.47.6"
+          base = "https://storage.googleapis.com/flutter_infra_release/releases"
+          with urllib.request.urlopen(base + "/releases_linux.json") as response:
+              releases = json.load(response)
+          release = next(r for r in releases["releases"] if r["version"] == version and r["channel"] == "stable")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("url=" + releases["base_url"] + "/" + release["archive"] + "\n")
+              output.write("sha=" + release["sha256"] + "\n")
+          PY
+        id: flutter_release
+      - name: Set up Flutter and Java
+        working-directory: .
+        env:
+          FLUTTER_URL: ${{ steps.flutter_release.outputs.url }}
+          FLUTTER_SHA: ${{ steps.flutter_release.outputs.sha }}
+        run: |
+          curl --fail --location --retry 3 "$FLUTTER_URL" -o "$RUNNER_TEMP/flutter.tar.xz"
+          echo "$FLUTTER_SHA  $RUNNER_TEMP/flutter.tar.xz" | sha256sum --check
+          tar -xf "$RUNNER_TEMP/flutter.tar.xz" -C "$RUNNER_TEMP"
+          rm "$RUNNER_TEMP/flutter.tar.xz"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+      - name: Configure build tools
+        run: |
+          flutter config --no-analytics --jdk-dir "$JAVA_HOME" --android-sdk "$ANDROID_HOME"
+          set +o pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          set -o pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358" "cmake;3.22.1" "platform-tools"
+          flutter --version
+          chmod +x android/gradlew
+      - name: Resolve, analyze and test
+        run: |
+          flutter pub get
+          dart format lib test
+          flutter analyze
+          flutter test --reporter expanded --concurrency=2
+      - name: Create development signing key
+        run: |
+          keytool -genkeypair -keystore android/app/development.keystore -storetype JKS -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Daftar Cloud Test, O=Personal Testing, C=EG"
+      - name: Build and verify APK
+        run: |
+          flutter build apk --release
+          sdk_tools="$ANDROID_HOME/build-tools/36.0.0"
+          apk="build/app/outputs/flutter-apk/app-release.apk"
+          "$sdk_tools/apksigner" verify --verbose --print-certs "$apk"
+          "$sdk_tools/aapt" dump badging "$apk" | grep "package: name='com.daftar.spare_parts' versionCode='2' versionName='1.0.1'"
+          if "$sdk_tools/aapt" dump permissions "$apk" | grep -q android.permission.INTERNET; then
+            echo "Unexpected INTERNET permission"
+            exit 1
+          fi
+          mkdir -p deliverables
+          cp "$apk" deliverables/Daftar-Parts-1.0.1.apk
+          sha256sum deliverables/Daftar-Parts-1.0.1.apk > deliverables/SHA256.txt
+          "$sdk_tools/apksigner" verify --print-certs "$apk" > deliverables/SIGNATURE.txt
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify release startup offline on Android 7
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 24
+          arch: x86_64
+          target: default
+          ram-size: 2048M
+          emulator-boot-timeout: 600
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          working-directory: android_app
+          script: python3 ci/android_smoke.py
+      - name: Upload startup diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-startup-diagnostics
+          path: android_app/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Daftar-Parts-1.0.1
+          path: android_app/deliverables/
+          if-no-files-found: error
+          retention-days: 7
