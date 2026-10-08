@@ -12,7 +12,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
       VERIFIED_RUN_ID: '37807029098'
@@ -77,7 +77,7 @@ jobs:
           yes | sdkmanager --licenses >/dev/null
           set -o pipefail
           for attempt in 1 2 3; do
-            if sdkmanager --install emulator "platform-tools" "system-images;android-24;default;x86_64" "platforms;android-24" "build-tools;37.0.0"; then
+            if sdkmanager --install emulator "platform-tools" "system-images;android-30;default;x86_64" "platforms;android-30" "build-tools;37.0.0"; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then exit 1; fi
@@ -92,16 +92,16 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Verify release offline first launch and relaunch on Android 7
+      - name: Verify release offline first launch and relaunch on Android 11
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
-          api-level: 24
+          api-level: 30
           arch: x86_64
           target: default
-          ram-size: '4096'
+          ram-size: '3072'
           emulator-boot-timeout: 600
-          emulator-options: -no-window -gpu swiftshader_indirect -memory 4096 -no-snapshot -noaudio -no-boot-anim
-          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -memory 3072 -no-metrics -no-snapshot -noaudio -no-boot-anim
+          disable-animations: false
           working-directory: android_app
           script: python3 ci/android_smoke.py
       - name: Upload Android startup diagnostics
@@ -139,7 +139,7 @@ jobs:
           قاعدة SQLite والصور محفوظة على الهاتف. يشمل القطع والموردين والمشتريات
           والبحث والأسعار والسجل ونسخة ZIP كاملة واستيراد وتصدير CSV.
 
-          نجح 14 اختبارًا آليًا، وتم تشغيل هذا الملف وإعادة فتحه دون اتصال على Android 7.
+          نجح 14 اختبارًا آليًا، وتم تشغيل هذا الملف وإعادة فتحه دون اتصال على Android 11.
           المصدر: $VERIFIED_SHA
           بناء واختبارات التطبيق: https://github.com/$GITHUB_REPOSITORY/actions/runs/$VERIFIED_RUN_ID
           اختبار Android دون اتصال: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
