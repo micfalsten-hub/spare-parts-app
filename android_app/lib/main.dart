@@ -892,9 +892,13 @@ class PurchaseTile extends StatelessWidget {
       context,
       title: 'حذف عملية الشراء؟',
       details: 'ستُنقل العملية إلى سلة المحذوفات لمدة 30 يومًا ويمكن استعادتها خلال هذه المدة.',
-    )) return;
+    )) {
+      return;
+    }
     await store.deletePurchase(row['id'] as String);
-    if (context.mounted) message(context, 'تم نقل عملية الشراء إلى المحذوفات');
+    if (context.mounted) {
+      message(context, 'تم نقل عملية الشراء إلى المحذوفات');
+    }
   }
   @override
   Widget build(BuildContext context) => Surface(
@@ -974,7 +978,9 @@ class ProductDetail extends StatelessWidget {
                   details: count == 0
                       ? 'ستُنقل القطعة إلى سلة المحذوفات لمدة 30 يومًا.'
                       : 'ستُنقل القطعة وعمليات الشراء المرتبطة بها ($count) إلى سلة المحذوفات لمدة 30 يومًا.',
-                )) return;
+                )) {
+                  return;
+                }
                 await store.deleteProduct(id);
                 if (context.mounted) {
                   Navigator.of(context).pop();
@@ -1267,7 +1273,9 @@ class SupplierDetail extends StatelessWidget {
                   details: count == 0
                       ? 'سينتقل المورد إلى سلة المحذوفات لمدة 30 يومًا.'
                       : 'سينتقل المورد وعمليات الشراء المرتبطة به ($count) إلى سلة المحذوفات لمدة 30 يومًا.',
-                )) return;
+                )) {
+                  return;
+                }
                 await store.deleteSupplier(id);
                 if (context.mounted) {
                   Navigator.of(context).pop();
@@ -2125,7 +2133,9 @@ class TrashScreen extends StatelessWidget {
                   );
                   if (!accepted) return;
                   await store.emptyTrash();
-                  if (context.mounted) message(context, 'تم إفراغ السلة');
+                  if (context.mounted) {
+                    message(context, 'تم إفراغ السلة');
+                  }
                 },
                 icon: const Icon(Icons.delete_sweep_outlined),
               ),
@@ -2201,9 +2211,13 @@ class _TrashTile extends StatelessWidget {
               onPressed: () async {
                 try {
                   await store.restoreTrashEntry(entry['id'] as String);
-                  if (context.mounted) message(context, 'تمت استعادة العنصر');
+                  if (context.mounted) {
+                    message(context, 'تمت استعادة العنصر');
+                  }
                 } catch (error) {
-                  if (context.mounted) message(context, errorText(error));
+                  if (context.mounted) {
+                    message(context, errorText(error));
+                  }
                 }
               },
               icon: const Icon(Icons.restore_outlined, color: teal),
