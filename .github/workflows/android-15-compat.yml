@@ -30,7 +30,7 @@ jobs:
           yes | sdkmanager --licenses >/dev/null
           set -o pipefail
           for attempt in 1 2 3; do
-            if sdkmanager --install emulator platform-tools "platforms;android-35" "system-images;android-35;${ matrix.image }};x86_64" "build-tools;37.0.0"; then
+            if sdkmanager --install emulator platform-tools "platforms;android-35" "system-images;android-35;${{ matrix.image }};x86_64" "build-tools;37.0.0"; then
               break
             fi
             if [ "$attempt" -eq 3 ]; then exit 1; fi
@@ -57,7 +57,7 @@ jobs:
         with:
           api-level: 35
           arch: x86_64
-          target: ${ matrix.image }}
+          target: ${{ matrix.image }}
           ram-size: "3072"
           emulator-boot-timeout: 600
           emulator-options: -no-window -gpu swiftshader_indirect -memory 3072 -no-snapshot -noaudio -no-boot-anim
@@ -65,14 +65,14 @@ jobs:
           script: |
             actual="$(adb shell getconf PAGE_SIZE | tr -d '\r')"
             echo "Emulator page size: $actual"
-            test "$actual" = "${ matrix.expected_page_size }}"
+            test "$actual" = "${{ matrix.expected_page_size }}"
             adb install -r build/app/outputs/flutter-apk/app-release.apk
             python3 ci/android_smoke.py
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: android-15-${ matrix.image }}-diagnostics
+          name: android-15-${{ matrix.image }}-diagnostics
           path: android_app/artifacts/
           if-no-files-found: ignore
           retention-days: 7
