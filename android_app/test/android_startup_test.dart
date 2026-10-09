@@ -84,6 +84,7 @@ class _AndroidDatabaseChannel {
             <String, Object?>{'journal_mode': 'delete'},
           ]);
         }
+        if (sql.contains('FROM TRASH')) return rows(<DbRow>[]);
         if (sql.contains('FROM PRODUCTS P ')) {
           if (failCatalogQuery) {
             throw PlatformException(
@@ -137,8 +138,8 @@ void main() {
 
     expect(store.factory, same(databaseFactorySqflitePlugin));
     expect(store.db.isOpen, isTrue);
-    expect(android.userVersion, 1);
-    expect(android.createdTables, hasLength(3));
+    expect(android.userVersion, appDatabaseVersion);
+    expect(android.createdTables, hasLength(4));
     expect(store.products, isEmpty);
     expect(store.suppliers, isEmpty);
     expect(store.purchases, isEmpty);
@@ -197,7 +198,14 @@ void main() {
     await store.open();
 
     expect(android.opens, 2);
-    expect(android.createdTables, isEmpty);
+    expect(
+      android.createdTables.where((sql) =>
+          sql.startsWith('CREATE TABLE PRODUCTS') ||
+          sql.startsWith('CREATE TABLE SUPPLIERS') ||
+          sql.startsWith('CREATE TABLE PURCHASES')),
+      isEmpty,
+    );
+    expect(android.createdTables, hasLength(1));
     expect(store.products.single['name'], 'قطعة محفوظة');
     expect(store.suppliers.single['name'], 'مورد محفوظ');
     expect(store.purchases.single['date'], isNull);
@@ -225,7 +233,8 @@ void main() {
     await store.open();
     expect(android.opens, 2);
     expect(store.db.isOpen, isTrue);
-    expect(android.createdTables, isEmpty);
+    expect(android.createdTables, hasLength(1));
+    expect(android.createdTables.single, startsWith('CREATE TABLE TRASH'));
     expect(store.products, isEmpty);
   });
 }
