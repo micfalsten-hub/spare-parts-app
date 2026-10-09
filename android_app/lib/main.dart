@@ -1242,7 +1242,9 @@ class SupplierDetail extends StatelessWidget {
         message(context, 'لا يوجد تطبيق مناسب للاتصال بهذا الرقم.');
       }
     } catch (_) {
-      if (context.mounted) message(context, 'تعذر الاتصال. تحقق من رقم الهاتف.');
+      if (context.mounted) {
+        message(context, 'تعذر الاتصال. تحقق من رقم الهاتف.');
+      }
     }
   }
 
