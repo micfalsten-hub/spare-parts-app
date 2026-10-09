@@ -105,6 +105,83 @@ void main() {
       );
     },
   );
+  test('Deleted products, suppliers, and purchases can be restored from trash', () async {
+    await store.loadExamples();
+
+    await store.deleteProduct('P001');
+    expect(store.products.length, 2);
+    expect(store.purchases.length, 2);
+    final productTrash = store.trashEntries.singleWhere((r) => r['entity_type'] == 'product');
+    await store.restoreTrashEntry(productTrash['id'] as String);
+    expect(store.products.length, 3);
+    expect(store.purchases.length, 3);
+
+    await store.deleteSupplier('S002');
+    expect(store.suppliers.length, 2);
+    expect(store.purchases.length, 2);
+    final supplierTrash = store.trashEntries.singleWhere((r) => r['entity_type'] == 'supplier');
+    await store.restoreTrashEntry(supplierTrash['id'] as String);
+    expect(store.suppliers.length, 3);
+    expect(store.purchases.length, 3);
+
+    final purchaseId = store.purchases.first['id'] as String;
+    await store.deletePurchase(purchaseId);
+    expect(store.purchases.length, 2);
+    final purchaseTrash = store.trashEntries.singleWhere((r) => r['entity_type'] == 'purchase');
+    await store.restoreTrashEntry(purchaseTrash['id'] as String);
+    expect(store.purchases.length, 3);
+    expect(store.trashEntries, isEmpty);
+  });
+
+  test('Database v1 upgrades without losing data and adds origin and trash', () async {
+    await store.close();
+    await dir.delete(recursive: true);
+    final active = Directory(p.join(dir.path, 'active'));
+    await active.create(recursive: true);
+    final legacy = await databaseFactoryFfi.openDatabase(
+      p.join(active.path, 'database.sqlite'),
+      options: OpenDatabaseOptions(
+        version: 1,
+        onCreate: (db, _) async {
+          await db.execute('''CREATE TABLE products (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL CHECK(length(trim(name))>0),
+            code TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '',
+            selling_price INTEGER CHECK(selling_price >= 0),
+            image TEXT, notes TEXT NOT NULL DEFAULT '')''');
+          await db.execute('''CREATE TABLE suppliers (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL CHECK(length(trim(name))>0),
+            phone TEXT NOT NULL DEFAULT '', whatsapp TEXT NOT NULL DEFAULT '',
+            address TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '')''');
+          await db.execute('''CREATE TABLE purchases (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
+            product_id TEXT NOT NULL REFERENCES products(id),
+            supplier_id TEXT NOT NULL REFERENCES suppliers(id),
+            date TEXT, price INTEGER NOT NULL CHECK(price >= 0),
+            notes TEXT NOT NULL DEFAULT '')''');
+          await db.execute('CREATE INDEX purchase_product ON purchases(product_id, date DESC, sequence DESC)');
+          await db.execute('CREATE INDEX purchase_supplier ON purchases(supplier_id, date DESC, sequence DESC)');
+        },
+      ),
+    );
+    await legacy.insert('products', {'id': 'old-p', 'name': 'قطعة قديمة', 'selling_price': 1200});
+    await legacy.insert('suppliers', {'id': 'old-s', 'name': 'مورد قديم'});
+    await legacy.insert('purchases', {
+      'id': 'old-b',
+      'product_id': 'old-p',
+      'supplier_id': 'old-s',
+      'price': 900,
+      'date': null,
+    });
+    await legacy.close();
+
+    await store.open();
+    expect(store.products.single['name'], 'قطعة قديمة');
+    expect(store.products.single['country_of_origin'], '');
+    expect(store.purchases.single['id'], 'old-b');
+    expect(await store.db.getVersion(), appDatabaseVersion);
+    expect(store.trashEntries, isEmpty);
+  });
+
   test(
     'Backup round trips SQLite and image bytes; corruption leaves live data untouched',
     () async {
@@ -115,6 +192,7 @@ void main() {
         'id': 'P001',
         'name': 'تيل فرامل تويوتا',
         'selling_price': 95000,
+        'country_of_origin': 'اليابان',
       }, photoSource: image.path);
       final backup = await store.backup();
       final originalImage =
@@ -163,6 +241,11 @@ void main() {
         'phone': '01000000000',
         'notes': 'سطر أول\nسطر ثانٍ, مكتوب',
       });
+      await store.saveProduct({
+        'id': 'P001',
+        'name': 'تيل فرامل تويوتا',
+        'country_of_origin': 'اليابان',
+      });
       final exported = await store.exportCsv();
       final plan = parseCsvImport(exported, 'tables.zip');
       expect(plan.count, 9);
@@ -172,6 +255,7 @@ void main() {
       try {
         await target.importCsv(plan);
         expect(target.products.length, 3);
+        expect(target.products.firstWhere((p) => p['id'] == 'P001')['country_of_origin'], 'اليابان');
         expect(target.purchases.length, 3);
         expect(
           target.suppliers.firstWhere((s) => s['id'] == 'S001')['notes'],

@@ -1,58 +1,44 @@
-# دفتر القطع — standalone offline Android app
+# دفتر القطع — تطبيق Android مستقل
 
-Version 1.0.1 (build 2). Arabic RTL Flutter app for one spare-parts trader.
+الإصدار 1.0.2 (البناء 3)، بواجهة عربية من اليمين إلى اليسار.
 
-Daily use needs only the installed APK. Products, suppliers, purchases, photos,
-search, prices, history, CSV import/export and complete ZIP backup/restore run
-on the phone. There is no account, server, cloud sync or internet permission in
-the release Android manifest. Calls and WhatsApp are optional external actions.
+بعد التثبيت يعمل التطبيق دون حساب أو إنترنت. يحفظ المنتجات والموردين والمشتريات والصور والبحث والأسعار والتاريخ وقاعدة SQLite والنسخ الاحتياطية على الهاتف. المزامنة مع Google مؤجلة حاليًا حسب طلب المستخدم. أزيلت حقول وأزرار واتساب، وبقي الاتصال الهاتفي اختياريًا.
 
-## Cloud build
+## التعديلات في 1.0.2
 
-The workflow on branch codex/android-offline-build builds entirely on a GitHub-hosted Ubuntu runner.
-It runs static analysis, SQLite/widget/startup regression tests, verifies the
-release signature/version/permissions, and launches the actual APK twice on an
-Android 7 emulator with Wi-Fi and mobile data disabled.
+- إضافة بلد المنشأ للقطعة والبحث عنه وتصديره في CSV.
+- نقل حذف القطعة أو المورد أو الشراء إلى سلة يمكن الاستعادة منها خلال 30 يومًا.
+- حذف سجل مشتريات القطعة أو المورد المرتبط معها، مع حفظه في السلة واستعادته معها.
+- تفريغ السلة تلقائيًا بعد انتهاء 30 يومًا.
+- ترقية قاعدة البيانات من النسخة 1 إلى النسخة 3 دون مسح الدفتر الحالي.
+- استعادة النسخ الاحتياطية السابقة بعد ترقيتها تلقائيًا.
+- استمرار استيراد قوالب CSV القديمة.
 
-After a successful run, download the Daftar-Parts-1.0.1 artifact from GitHub Actions.
-Unzip it on your phone and open Daftar-Parts-1.0.1.apk to install.
-The APK has a new development signature. An earlier differently signed APK must
-be uninstalled first. If it contains records, export a full backup before uninstalling.
+## البناء السحابي
 
-No original signing key or user database/photos are published. A fresh development
-key is generated on the cloud runner. For future in-place upgrades use a securely
-retained production signing key; these test builds are intended for fresh installation.
+الفرع `codex/android-offline-build` يشغّل البناء والاختبارات على GitHub Actions، دون أدوات بناء على كمبيوتر المستخدم. يجري التحليل والاختبارات، ويتحقق من توقيع APK وإصداره وصلاحياته، ثم يشغّله على محاكي Android 11 بلا Wi-Fi أو بيانات هاتف.
 
-## Build from source
+بعد نجاح التشغيل، حمّل القطعة `Daftar-Parts-1.0.2` من صفحة GitHub Actions، ثم فك الضغط على الهاتف وافتح `Daftar-Parts-1.0.2.apk`.
 
-Flutter 3.47.6, Java 17, Android SDK/build tools 36 and NDK 28.2.13676358 are the pinned tools.
-Run the following from android_app:
+هذه نسخة اختبار بتوقيع جديد. إذا كان إصدار سابق مثبتًا، صدّر نسخة ZIP كاملة من داخله، ثم أزله وثبّت الإصدار الجديد، وبعدها استعد النسخة. لا تحذف التطبيق قبل حفظ نسخة خارجية إذا كنت أدخلت بيانات.
+
+## البناء من المصدر
+
+إصدارات البناء المثبتة: Flutter 3.47.6 وJava 17 وAndroid SDK/Build Tools 36 وNDK 28.2.13676358.
+
+من مجلد `android_app`:
 
 ```sh
 flutter pub get
 flutter analyze
 flutter test
-keytool -genkeypair -keystore android/app/development.keystore -storetype JKS -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Daftar Development"
 flutter build apk --release
 ```
 
-The installer is build/app/outputs/flutter-apk/app-release.apk.
+## التخزين والاستعادة
 
-## Storage and recovery
+قاعدة البيانات محلية. عند فتح دفتر من إصدار 1.0.1 أو ملف النسخة السابقة، تتم إضافة بلد المنشأ وسلة المحذوفات تلقائيًا، مع الإبقاء على المنتجات والموردين والمشتريات والصور.
 
-SQLite schema version remains 1. Version 1.0.1 fixes Android startup by querying
-the result-returning journal mode PRAGMA, preserves existing local records and
-images, closes failed database handles, and provides optional copyable startup
-diagnostics and retry. It never deletes the local database on a startup failure.
+النسخة الكاملة ZIP تشمل قاعدة البيانات والصور وبصمات التحقق. يفحص التطبيق النسخة قبل الاستبدال ويحفظ نقطة رجوع إذا فشلت الاستعادة. ملفات CSV تحافظ على الروابط بين الجداول، وتعرض السعر بالجنيه المصري. التواريخ التاريخية غير المعروفة تبقى فارغة.
 
-A full backup includes SQLite, referenced product photos and checksum metadata.
-Restore validates the archive/database before replacing current data and
-preserves a rollback copy if restoration fails. CSV import validates records and
-references before committing. Prices are integer minor units.
-
-Examples are optional and added only to an empty notebook. They contain the
-three prototype products/suppliers with unknown purchase dates left blank.
-No fabricated historical dates or contact details are included.
-
-Camera/gallery and external file selection still need a real-phone check.
-Automated emulator startup checks validate the delivered release APK.
+الأمثلة الثلاثة اختيارية، ولا تضيف تواريخ شراء غير معروفة أو بيانات اتصال مختلقة.

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -9,6 +10,8 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
 typedef DbRow = Map<String, Object?>;
+const appDatabaseVersion = 3;
+const trashRetention = Duration(days: 30);
 
 String digits(String input) {
   const arabic = '٠١٢٣٤٥٦٧٨٩';
@@ -77,7 +80,9 @@ class Store extends ChangeNotifier {
   List<DbRow> products = [];
   List<DbRow> suppliers = [];
   List<DbRow> purchases = [];
+  List<DbRow> trashEntries = [];
   bool _busy = false;
+  Timer? _purgeTimer;
   Directory get active => Directory(p.join(root.path, 'active'));
   Directory get imageDir => Directory(p.join(active.path, 'images'));
   String get dbPath => p.join(active.path, 'database.sqlite');
@@ -94,7 +99,7 @@ class Store extends ChangeNotifier {
     _db = await factory.openDatabase(
       dbPath,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: appDatabaseVersion,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys=ON');
           // Setting journal_mode returns a row. Android execSQL (execute)
@@ -108,6 +113,7 @@ class Store extends ChangeNotifier {
           await db.execute('''CREATE TABLE products (
           id TEXT PRIMARY KEY, name TEXT NOT NULL CHECK(length(trim(name))>0),
           code TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '',
+          country_of_origin TEXT NOT NULL DEFAULT '',
           selling_price INTEGER CHECK(selling_price >= 0),
           image TEXT, notes TEXT NOT NULL DEFAULT '')''');
           await db.execute('''CREATE TABLE suppliers (
@@ -126,11 +132,38 @@ class Store extends ChangeNotifier {
           await db.execute(
             'CREATE INDEX purchase_supplier ON purchases(supplier_id, date DESC, sequence DESC)',
           );
+          await db.execute('''CREATE TABLE trash (
+            id TEXT PRIMARY KEY, entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL, payload TEXT NOT NULL,
+            deleted_at TEXT NOT NULL)''');
+        },
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) {
+            await db.execute(
+              "ALTER TABLE products ADD COLUMN country_of_origin TEXT NOT NULL DEFAULT ''",
+            );
+          }
+          if (oldVersion < 3) {
+            await db.execute('''CREATE TABLE trash (
+              id TEXT PRIMARY KEY, entity_type TEXT NOT NULL,
+              entity_id TEXT NOT NULL, payload TEXT NOT NULL,
+              deleted_at TEXT NOT NULL)''');
+          }
         },
       ),
     );
     try {
+      await _purgeExpiredTrash();
       await refresh();
+      _purgeTimer?.cancel();
+      _purgeTimer = Timer.periodic(const Duration(hours: 1), (_) {
+        if (!_busy && _db != null) {
+          unawaited(_write(() async {
+            await _purgeExpiredTrash();
+            await refresh();
+          }));
+        }
+      });
     } catch (_) {
       // Release the handle so retry can reopen it. Never delete user files.
       try {
@@ -152,6 +185,7 @@ class Store extends ChangeNotifier {
       FROM purchases b JOIN products p ON p.id=b.product_id
       JOIN suppliers s ON s.id=b.supplier_id
       ORDER BY (b.date IS NULL) ASC, b.date DESC, b.sequence DESC''');
+    trashEntries = await db.query('trash', orderBy: 'deleted_at DESC');
     notifyListeners();
   }
 
@@ -253,6 +287,131 @@ class Store extends ChangeNotifier {
     return id;
   });
 
+  Future<int> deleteProduct(String id) => _write(() async {
+    final removedPurchases = await db.transaction((txn) async {
+      final products = await txn.query('products', where: 'id=?', whereArgs: [id]);
+      if (products.isEmpty) return 0;
+      final linked = await txn.query('purchases', where: 'product_id=?', whereArgs: [id]);
+      await txn.insert('trash', {
+        'id': newId('T'),
+        'entity_type': 'product',
+        'entity_id': id,
+        'payload': jsonEncode({'entity': products.first, 'purchases': linked}),
+        'deleted_at': DateTime.now().toUtc().toIso8601String(),
+      });
+      await txn.delete('purchases', where: 'product_id=?', whereArgs: [id]);
+      await txn.delete('products', where: 'id=?', whereArgs: [id]);
+      return linked.length;
+    });
+    await refresh();
+    return removedPurchases;
+  });
+
+  Future<int> deleteSupplier(String id) => _write(() async {
+    final removedPurchases = await db.transaction((txn) async {
+      final suppliers = await txn.query('suppliers', where: 'id=?', whereArgs: [id]);
+      if (suppliers.isEmpty) return 0;
+      final linked = await txn.query('purchases', where: 'supplier_id=?', whereArgs: [id]);
+      await txn.insert('trash', {
+        'id': newId('T'),
+        'entity_type': 'supplier',
+        'entity_id': id,
+        'payload': jsonEncode({'entity': suppliers.first, 'purchases': linked}),
+        'deleted_at': DateTime.now().toUtc().toIso8601String(),
+      });
+      await txn.delete('purchases', where: 'supplier_id=?', whereArgs: [id]);
+      await txn.delete('suppliers', where: 'id=?', whereArgs: [id]);
+      return linked.length;
+    });
+    await refresh();
+    return removedPurchases;
+  });
+
+  Future<void> deletePurchase(String id) => _write(() async {
+    await db.transaction((txn) async {
+      final rows = await txn.query('purchases', where: 'id=?', whereArgs: [id]);
+      if (rows.isEmpty) return;
+      await txn.insert('trash', {
+        'id': newId('T'),
+        'entity_type': 'purchase',
+        'entity_id': id,
+        'payload': jsonEncode({'entity': rows.first, 'purchases': []}),
+        'deleted_at': DateTime.now().toUtc().toIso8601String(),
+      });
+      await txn.delete('purchases', where: 'id=?', whereArgs: [id]);
+    });
+    await refresh();
+  });
+
+  Future<void> restoreTrashEntry(String id) => _write(() async {
+    await db.transaction((txn) async {
+      final entries = await txn.query('trash', where: 'id=?', whereArgs: [id]);
+      if (entries.isEmpty) return;
+      final entry = entries.first;
+      final payload = jsonDecode(entry['payload'] as String) as Map<String, dynamic>;
+      final entity = Map<String, Object?>.from(payload['entity'] as Map);
+      final linked = (payload['purchases'] as List)
+          .map((row) => Map<String, Object?>.from(row as Map))
+          .toList();
+      final table = switch (entry['entity_type']) {
+        'product' => 'products',
+        'supplier' => 'suppliers',
+        'purchase' => 'purchases',
+        _ => throw const FormatException('عنصر سلة غير معروف'),
+      };
+      final exists = await txn.query(table, where: 'id=?', whereArgs: [entity['id']]);
+      if (exists.isNotEmpty) {
+        throw const FormatException('يوجد عنصر آخر بنفس المعرّف؛ لم تتم الاستعادة');
+      }
+      await txn.insert(table, entity);
+      for (final purchase in linked) {
+        final exists = await txn.query('purchases', where: 'id=?', whereArgs: [purchase['id']]);
+        if (exists.isNotEmpty) {
+          throw const FormatException('إحدى عمليات الشراء موجودة بالفعل؛ لم تتم الاستعادة');
+        }
+        await txn.insert('purchases', purchase);
+      }
+      await txn.delete('trash', where: 'id=?', whereArgs: [id]);
+    });
+    await refresh();
+  });
+
+  Future<void> emptyTrash() => _write(() async {
+    final entries = await db.query('trash');
+    await db.transaction((txn) async => txn.delete('trash'));
+    await _removeTrashedImages(entries);
+    await refresh();
+  });
+
+  Future<void> _purgeExpiredTrash() async {
+    final cutoff = DateTime.now().toUtc().subtract(trashRetention).toIso8601String();
+    final expired = await db.query('trash', where: 'deleted_at<?', whereArgs: [cutoff]);
+    if (expired.isEmpty) return;
+    await db.transaction((txn) async {
+      await txn.delete('trash', where: 'deleted_at<?', whereArgs: [cutoff]);
+    });
+    await _removeTrashedImages(expired);
+    await refresh();
+  }
+
+  Future<void> _removeTrashedImages(List<DbRow> entries) async {
+    for (final entry in entries) {
+      if (entry['entity_type'] != 'product') continue;
+      try {
+        final payload = jsonDecode(entry['payload'] as String) as Map<String, dynamic>;
+        final entity = Map<String, Object?>.from(payload['entity'] as Map);
+        final image = entity['image'] as String?;
+        if (image == null || !safeImage(image)) continue;
+        final file = File(imagePath(image));
+        if (await file.exists()) await file.delete();
+      } on FileSystemException {
+        // Expired data is gone; a leftover photo is safe and can be ignored.
+      } on FormatException {
+        // Skip a damaged optional trash photo reference.
+      }
+    }
+  });
+
   Future<void> savePurchase(DbRow row, {int? sellingPrice}) => _write(() async {
     final value = Map<String, Object?>.from(row);
     final date = value['date'];
@@ -334,16 +493,24 @@ class Store extends ChangeNotifier {
       return File(dbPath).readAsBytes();
     });
     final files = <String, Uint8List>{'database.sqlite': snapshot};
-    for (final row in products) {
-      final name = row['image'] as String?;
-      if (name != null) {
-        if (!safeImage(name)) throw const FormatException('اسم صورة غير صالح');
-        final file = File(imagePath(name));
-        if (!await file.exists()) {
-          throw const FormatException('صورة مفقودة؛ عدّل صورة المنتج أولًا');
-        }
-        files['images/$name'] = await file.readAsBytes();
+    final imageNames = <String>{
+      for (final row in products)
+        if (row['image'] != null) row['image'] as String,
+    };
+    for (final entry in trashEntries) {
+      if (entry['entity_type'] != 'product') continue;
+      final payload = jsonDecode(entry['payload'] as String) as Map<String, dynamic>;
+      final entity = Map<String, Object?>.from(payload['entity'] as Map);
+      final name = entity['image'] as String?;
+      if (name != null) imageNames.add(name);
+    }
+    for (final name in imageNames) {
+      if (!safeImage(name)) throw const FormatException('اسم صورة غير صالح');
+      final file = File(imagePath(name));
+      if (!await file.exists()) {
+        throw const FormatException('صورة مفقودة؛ عدّل صورة المنتج أولًا');
       }
+      files['images/$name'] = await file.readAsBytes();
     }
     files['manifest.json'] = Uint8List.fromList(
       utf8.encode(
@@ -411,9 +578,25 @@ class Store extends ChangeNotifier {
       }
       check = await factory.openDatabase(
         p.join(staged.path, 'database.sqlite'),
-        options: OpenDatabaseOptions(readOnly: true, singleInstance: false),
+        options: OpenDatabaseOptions(
+          version: appDatabaseVersion,
+          singleInstance: false,
+          onUpgrade: (database, oldVersion, newVersion) async {
+            if (oldVersion < 2) {
+              await database.execute(
+                "ALTER TABLE products ADD COLUMN country_of_origin TEXT NOT NULL DEFAULT ''",
+              );
+            }
+            if (oldVersion < 3) {
+              await database.execute('''CREATE TABLE trash (
+                id TEXT PRIMARY KEY, entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL, payload TEXT NOT NULL,
+                deleted_at TEXT NOT NULL)''');
+            }
+          },
+        ),
       );
-      if (await check.getVersion() != 1 ||
+      if (await check.getVersion() != appDatabaseVersion ||
           (await check.rawQuery(
                 'PRAGMA integrity_check',
               )).single.values.single !=
@@ -445,6 +628,16 @@ class Store extends ChangeNotifier {
         if ((row['price'] as int) < 0 ||
             (row['date'] != null && !validDate(row['date'] as String))) {
           throw const FormatException('بيانات شراء غير صالحة');
+        }
+      }
+      for (final entry in await check.query('trash')) {
+        if (entry['entity_type'] != 'product') continue;
+        final payload = jsonDecode(entry['payload'] as String) as Map<String, dynamic>;
+        final entity = Map<String, Object?>.from(payload['entity'] as Map);
+        final image = entity['image'] as String?;
+        if (image != null &&
+            (!safeImage(image) || !files.containsKey('images/$image'))) {
+          throw const FormatException('صورة مفقودة في سلة المحذوفات');
         }
       }
       await check.close();
@@ -544,6 +737,8 @@ class Store extends ChangeNotifier {
   Future<void> close() async {
     final opened = _db;
     _db = null;
+    _purgeTimer?.cancel();
+    _purgeTimer = null;
     await opened?.close();
   }
 }
@@ -605,16 +800,17 @@ const csvSpecs = [
       'Product_Name',
       'Code',
       'Category',
+      'Country_of_Origin',
       'Selling_Price',
       'Notes',
     ],
-    ['id', 'name', 'code', 'category', 'selling_price', 'notes'],
+    ['id', 'name', 'code', 'category', 'country_of_origin', 'selling_price', 'notes'],
     moneyKeys: {'selling_price'},
   ),
   CsvSpec(
     'suppliers',
-    ['Supplier_ID', 'Supplier_Name', 'Phone', 'WhatsApp', 'Address', 'Notes'],
-    ['id', 'name', 'phone', 'whatsapp', 'address', 'notes'],
+    ['Supplier_ID', 'Supplier_Name', 'Phone', 'Address', 'Notes'],
+    ['id', 'name', 'phone', 'address', 'notes'],
   ),
   CsvSpec(
     'purchases',
@@ -628,6 +824,20 @@ const csvSpecs = [
     ],
     ['id', 'product_id', 'supplier_id', 'date', 'price', 'notes'],
     moneyKeys: {'price'},
+  ),
+];
+
+const legacyCsvSpecs = [
+  CsvSpec(
+    'products',
+    ['Product_ID', 'Product_Name', 'Code', 'Category', 'Selling_Price', 'Notes'],
+    ['id', 'name', 'code', 'category', 'selling_price', 'notes'],
+    moneyKeys: {'selling_price'},
+  ),
+  CsvSpec(
+    'suppliers',
+    ['Supplier_ID', 'Supplier_Name', 'Phone', 'WhatsApp', 'Address', 'Notes'],
+    ['id', 'name', 'phone', 'whatsapp', 'address', 'notes'],
   ),
 ];
 
@@ -697,7 +907,7 @@ ImportPlan parseCsvImport(Uint8List bytes, String filename) {
     final rows = csvDecode(utf8.decode(entry.value));
     if (rows.isEmpty) continue;
     final header = rows.first.map((s) => s.trim()).toList();
-    final matches = csvSpecs.where(
+    final matches = (csvSpecs + legacyCsvSpecs).where(
       (s) =>
           s.columns.length == header.length &&
           List.generate(

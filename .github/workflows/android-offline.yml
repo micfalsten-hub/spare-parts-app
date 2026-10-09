@@ -71,14 +71,14 @@ jobs:
           sdk_tools="$ANDROID_HOME/build-tools/36.0.0"
           apk="build/app/outputs/flutter-apk/app-release.apk"
           "$sdk_tools/apksigner" verify --verbose --print-certs "$apk"
-          "$sdk_tools/aapt" dump badging "$apk" | grep "package: name='com.daftar.spare_parts' versionCode='2' versionName='1.0.1'"
+          "$sdk_tools/aapt" dump badging "$apk" | grep "package: name='com.daftar.spare_parts' versionCode='3' versionName='1.0.2'"
           if "$sdk_tools/aapt" dump permissions "$apk" | grep -q android.permission.INTERNET; then
             echo "Unexpected INTERNET permission"
             exit 1
           fi
           mkdir -p deliverables
-          cp "$apk" deliverables/Daftar-Parts-1.0.1.apk
-          sha256sum deliverables/Daftar-Parts-1.0.1.apk > deliverables/SHA256.txt
+          cp "$apk" deliverables/Daftar-Parts-1.0.2.apk
+          sha256sum deliverables/Daftar-Parts-1.0.2.apk > deliverables/SHA256.txt
           "$sdk_tools/apksigner" verify --print-certs "$apk" > deliverables/SIGNATURE.txt
       - name: Upload compiled APK for diagnostics
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -96,16 +96,16 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Verify release startup offline on Android 7
+      - name: Verify release startup offline on Android 11
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
-          api-level: 24
+          api-level: 30
           arch: x86_64
           target: default
-          ram-size: '4096'
+          ram-size: '3072'
           emulator-boot-timeout: 600
-          emulator-options: -no-window -gpu swiftshader_indirect -memory 4096 -no-snapshot -noaudio -no-boot-anim
-          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -memory 3072 -no-snapshot -noaudio -no-boot-anim
+          disable-animations: false
           working-directory: android_app
           script: python3 ci/android_smoke.py
       - name: Upload startup diagnostics
@@ -118,7 +118,7 @@ jobs:
           retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Daftar-Parts-1.0.1
+          name: Daftar-Parts-1.0.2
           path: android_app/deliverables/
           if-no-files-found: error
           retention-days: 7

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -37,6 +38,32 @@ void message(BuildContext context, String text) =>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(text), behavior: SnackBarBehavior.floating),
     );
+
+Future<bool> confirmDelete(
+  BuildContext context, {
+  required String title,
+  required String details,
+}) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(details),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.delete_outline),
+            label: const Text('نقل للمحذوفات'),
+          ),
+        ],
+      ),
+    ) ??
+    false;
 Future<T?> page<T>(BuildContext context, Widget screen) =>
     Navigator.of(context).push<T>(MaterialPageRoute(builder: (_) => screen));
 
@@ -67,7 +94,7 @@ Future<void> main() async {
     }
     runApp(
       StartupFailureApp(
-        details: 'Daftar Parts 1.0.1 (2)\nStage: $stage\n$error\n\n$stack',
+        details: 'Daftar Parts 1.0.2 (3)\nStage: $stage\n$error\n\n$stack',
         retry: main,
       ),
     );
@@ -297,7 +324,7 @@ class _HomeState extends State<Home> {
                 .where(
                   (r) =>
                       normalize(
-                        '${r['name']} ${r['code']} ${r['category']} ${r['notes']} ${r['latest_supplier'] ?? ''}',
+                        '${r['name']} ${r['code']} ${r['category']} ${r['country_of_origin']} ${r['notes']} ${r['latest_supplier'] ?? ''}',
                       ).contains(q) &&
                       (filter == 0 ||
                           filter == 1 && r['selling_price'] == null ||
@@ -860,6 +887,15 @@ class PurchaseTile extends StatelessWidget {
   final Store store;
   final DbRow row;
   final bool showProduct;
+  Future<void> remove(BuildContext context) async {
+    if (!await confirmDelete(
+      context,
+      title: 'حذف عملية الشراء؟',
+      details: 'ستُنقل العملية إلى سلة المحذوفات لمدة 30 يومًا ويمكن استعادتها خلال هذه المدة.',
+    )) return;
+    await store.deletePurchase(row['id'] as String);
+    if (context.mounted) message(context, 'تم نقل عملية الشراء إلى المحذوفات');
+  }
   @override
   Widget build(BuildContext context) => Surface(
     onTap: () => page(context, PurchaseForm(store: store, row: row)),
@@ -881,6 +917,11 @@ class PurchaseTile extends StatelessWidget {
             Text(
               price(row['price']),
               style: const TextStyle(color: teal, fontWeight: FontWeight.w700),
+            ),
+            IconButton(
+              tooltip: 'حذف عملية الشراء',
+              onPressed: () => remove(context),
+              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
             ),
           ],
         ),
@@ -924,6 +965,25 @@ class ProductDetail extends StatelessWidget {
           title: const Text('تفاصيل القطعة'),
           actions: [
             IconButton(
+              tooltip: 'حذف القطعة',
+              onPressed: () async {
+                final count = history.length;
+                if (!await confirmDelete(
+                  context,
+                  title: 'حذف القطعة؟',
+                  details: count == 0
+                      ? 'ستُنقل القطعة إلى سلة المحذوفات لمدة 30 يومًا.'
+                      : 'ستُنقل القطعة وعمليات الشراء المرتبطة بها ($count) إلى سلة المحذوفات لمدة 30 يومًا.',
+                )) return;
+                await store.deleteProduct(id);
+                if (context.mounted) {
+                  Navigator.of(context).pop();
+                  message(context, 'تم نقل القطعة وسجلها إلى المحذوفات');
+                }
+              },
+              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+            ),
+            IconButton(
               tooltip: 'تعديل القطعة',
               onPressed: () =>
                   page(context, ProductForm(store: store, row: row)),
@@ -957,6 +1017,15 @@ class ProductDetail extends StatelessWidget {
                   ].where((v) => v != null && v != '').join(' · '),
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: muted),
+                ),
+              if (textOf(row, 'country_of_origin').isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    'بلد المنشأ: ${textOf(row, 'country_of_origin')}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: muted),
+                  ),
                 ),
               const SizedBox(height: 22),
               Container(
@@ -1160,29 +1229,14 @@ class SupplierDetail extends StatelessWidget {
   const SupplierDetail({super.key, required this.store, required this.id});
   final Store store;
   final String id;
-  Future<void> contact(
-    BuildContext context,
-    String number,
-    bool whatsapp,
-  ) async {
-    final clean = digits(number).replaceAll(RegExp(r'[\s()\-]'), '');
-    if (whatsapp && !RegExp(r'^\+?[1-9]\d{7,14}$').hasMatch(clean)) {
-      message(
-        context,
-        'أضف رقم واتساب بصيغة دولية، مثل +20 ثم الرقم بدون صفر البداية.',
-      );
-      return;
-    }
-    final uri = whatsapp
-        ? Uri.https('wa.me', '/${clean.replaceFirst('+', '')}')
-        : Uri(scheme: 'tel', path: clean);
+  Future<void> callPhone(BuildContext context, String number) async {
     try {
-      if (!await launchUrl(uri, mode: LaunchMode.externalApplication) &&
+      if (!await launchUrl(Uri(scheme: 'tel', path: number), mode: LaunchMode.externalApplication) &&
           context.mounted) {
-        message(context, 'لا يوجد تطبيق مناسب لفتح هذا الرقم.');
+        message(context, 'لا يوجد تطبيق مناسب للاتصال بهذا الرقم.');
       }
     } catch (_) {
-      if (context.mounted) message(context, 'تعذر فتح التطبيق. تحقق من الرقم.');
+      if (context.mounted) message(context, 'تعذر الاتصال. تحقق من رقم الهاتف.');
     }
   }
 
@@ -1198,11 +1252,30 @@ class SupplierDetail extends StatelessWidget {
       for (final r in history) {
         latest.putIfAbsent(r['product_id'] as String, () => r);
       }
-      final phone = textOf(row, 'phone'), whatsapp = textOf(row, 'whatsapp');
+      final phone = textOf(row, 'phone');
       return Scaffold(
         appBar: AppBar(
           title: const Text('ملف المورد'),
           actions: [
+            IconButton(
+              tooltip: 'حذف المورد',
+              onPressed: () async {
+                final count = history.length;
+                if (!await confirmDelete(
+                  context,
+                  title: 'حذف المورد؟',
+                  details: count == 0
+                      ? 'سينتقل المورد إلى سلة المحذوفات لمدة 30 يومًا.'
+                      : 'سينتقل المورد وعمليات الشراء المرتبطة به ($count) إلى سلة المحذوفات لمدة 30 يومًا.',
+                )) return;
+                await store.deleteSupplier(id);
+                if (context.mounted) {
+                  Navigator.of(context).pop();
+                  message(context, 'تم نقل المورد وسجل مشترياته إلى المحذوفات');
+                }
+              },
+              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+            ),
             IconButton(
               tooltip: 'تعديل المورد',
               onPressed: () =>
@@ -1264,19 +1337,13 @@ class SupplierDetail extends StatelessWidget {
                 children: [
                   if (phone.isNotEmpty)
                     FilledButton.icon(
-                      onPressed: () => contact(context, phone, false),
+                      onPressed: () => callPhone(context, phone),
                       icon: const Icon(Icons.call_outlined),
                       label: const Text('اتصال'),
                     ),
-                  if (whatsapp.isNotEmpty)
-                    OutlinedButton.icon(
-                      onPressed: () => contact(context, whatsapp, true),
-                      icon: const Icon(Icons.chat_outlined),
-                      label: const Text('واتساب'),
-                    ),
                 ],
               ),
-              if (phone.isEmpty && whatsapp.isEmpty)
+              if (phone.isEmpty)
                 const Text(
                   'أضف رقم الهاتف من تعديل المورد للتواصل بسرعة.',
                   style: TextStyle(color: muted),
@@ -1291,8 +1358,6 @@ class SupplierDetail extends StatelessWidget {
                       'الهاتف',
                       phone.isEmpty ? 'غير مسجل' : phone,
                     ),
-                    if (whatsapp.isNotEmpty)
-                      info(Icons.chat_outlined, 'واتساب', whatsapp),
                     info(
                       Icons.location_on_outlined,
                       'العنوان',
@@ -1422,7 +1487,7 @@ class ProductForm extends StatefulWidget {
 
 class _ProductFormState extends State<ProductForm> {
   final form = GlobalKey<FormState>();
-  late final TextEditingController name, code, category, sell, notes;
+  late final TextEditingController name, code, category, origin, sell, notes;
   String? photo;
   bool removePhoto = false, busy = false;
   @override
@@ -1432,6 +1497,7 @@ class _ProductFormState extends State<ProductForm> {
     name = TextEditingController(text: textOf(r, 'name'));
     code = TextEditingController(text: textOf(r, 'code'));
     category = TextEditingController(text: textOf(r, 'category'));
+    origin = TextEditingController(text: textOf(r, 'country_of_origin'));
     sell = TextEditingController(text: moneyInput(r['selling_price']));
     notes = TextEditingController(text: textOf(r, 'notes'));
     photo = widget.initialPhoto;
@@ -1439,7 +1505,7 @@ class _ProductFormState extends State<ProductForm> {
 
   @override
   void dispose() {
-    for (final c in [name, code, category, sell, notes]) {
+    for (final c in [name, code, category, origin, sell, notes]) {
       c.dispose();
     }
     super.dispose();
@@ -1475,6 +1541,7 @@ class _ProductFormState extends State<ProductForm> {
         'name': name.text.trim(),
         'code': code.text.trim(),
         'category': category.text.trim(),
+        'country_of_origin': origin.text.trim(),
         'selling_price': money(sell.text),
         'notes': notes.text.trim(),
         'image': removePhoto ? null : widget.row?['image'],
@@ -1558,6 +1625,7 @@ class _ProductFormState extends State<ProductForm> {
               field(name, 'اسم القطعة *', required: true),
               field(code, 'كود القطعة / رقمها'),
               field(category, 'الفئة أو السيارة'),
+              field(origin, 'بلد المنشأ'),
               field(sell, 'سعر البيع الحالي (ج.م)', amount: true),
               field(notes, 'ملاحظات', lines: 3),
               const SizedBox(height: 12),
@@ -1635,7 +1703,7 @@ class _SupplierFormState extends State<SupplierForm> {
   void initState() {
     super.initState();
     fields = [
-      for (final k in ['name', 'phone', 'whatsapp', 'address', 'notes'])
+      for (final k in ['name', 'phone', 'address', 'notes'])
         TextEditingController(text: textOf(widget.row ?? {}, k)),
     ];
   }
@@ -1650,23 +1718,15 @@ class _SupplierFormState extends State<SupplierForm> {
 
   Future<void> save() async {
     if (!form.currentState!.validate()) return;
-    final wa = digits(fields[2].text).replaceAll(RegExp(r'[\s()\-]'), '');
-    if (wa.isNotEmpty && !RegExp(r'^\+?[1-9]\d{7,14}$').hasMatch(wa)) {
-      message(
-        context,
-        'اكتب رقم واتساب دوليًا، مثل +20 ثم الرقم بدون صفر البداية.',
-      );
-      return;
-    }
     setState(() => busy = true);
     try {
       final id = await widget.store.saveSupplier({
         'id': widget.row?['id'],
         'name': fields[0].text.trim(),
         'phone': fields[1].text.trim(),
-        'whatsapp': wa,
-        'address': fields[3].text.trim(),
-        'notes': fields[4].text.trim(),
+        'whatsapp': '',
+        'address': fields[2].text.trim(),
+        'notes': fields[3].text.trim(),
       });
       if (mounted) {
         Navigator.pop(context, id);
@@ -1698,15 +1758,8 @@ class _SupplierFormState extends State<SupplierForm> {
             const SizedBox(height: 24),
             field(fields[0], 'اسم المورد *', required: true),
             field(fields[1], 'رقم الهاتف', keyboard: TextInputType.phone),
-            field(
-              fields[2],
-              'رقم واتساب الدولي',
-              keyboard: TextInputType.phone,
-              helper:
-                  'ابدأ بكود البلد مثل +20. فتح واتساب اختياري وقد يحتاج الإنترنت.',
-            ),
-            field(fields[3], 'العنوان', lines: 2),
-            field(fields[4], 'ملاحظات', lines: 3),
+            field(fields[2], 'العنوان', lines: 2),
+            field(fields[3], 'ملاحظات', lines: 3),
           ],
         ),
       ),
@@ -2049,6 +2102,119 @@ class _ChooserState extends State<Chooser> {
   );
 }
 
+class TrashScreen extends StatelessWidget {
+  const TrashScreen({super.key, required this.store});
+  final Store store;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: store,
+    builder: (context, _) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('سلة المحذوفات'),
+          actions: [
+            if (store.trashEntries.isNotEmpty)
+              IconButton(
+                tooltip: 'إفراغ السلة',
+                onPressed: () async {
+                  final accepted = await confirmDelete(
+                    context,
+                    title: 'إفراغ سلة المحذوفات؟',
+                    details: 'لن يمكن استعادة العناصر بعد إفراغ السلة.',
+                  );
+                  if (!accepted) return;
+                  await store.emptyTrash();
+                  if (context.mounted) message(context, 'تم إفراغ السلة');
+                },
+                icon: const Icon(Icons.delete_sweep_outlined),
+              ),
+          ],
+        ),
+        body: SafeArea(
+          child: store.trashEntries.isEmpty
+              ? const Empty(
+                  icon: Icons.delete_outline,
+                  title: 'سلة المحذوفات فارغة',
+                  subtitle: 'العناصر التي تحذفها ستبقى هنا 30 يومًا قبل حذفها نهائيًا.',
+                )
+              : ListView(
+                  padding: const EdgeInsets.all(20),
+                  children: [
+                    const Text(
+                      'يمكنك استعادة العناصر خلال 30 يومًا. تُحذف بعدها تلقائيًا.',
+                      style: TextStyle(color: muted, height: 1.7),
+                    ),
+                    const SizedBox(height: 16),
+                    for (final entry in store.trashEntries)
+                      _TrashTile(store: store, entry: entry),
+                  ],
+                ),
+        ),
+      );
+    },
+  );
+}
+
+class _TrashTile extends StatelessWidget {
+  const _TrashTile({required this.store, required this.entry});
+  final Store store;
+  final DbRow entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final payload = jsonDecode(entry['payload'] as String) as Map<String, dynamic>;
+    final entity = Map<String, Object?>.from(payload['entity'] as Map);
+    final linkedCount = (payload['purchases'] as List).length;
+    final type = entry['entity_type'] as String;
+    final title = switch (type) {
+      'product' => 'قطعة: ${textOf(entity, 'name')}',
+      'supplier' => 'مورد: ${textOf(entity, 'name')}',
+      _ => 'عملية شراء',
+    };
+    final day = (entry['deleted_at'] as String).substring(0, 10);
+    final linked = linkedCount == 0
+        ? ''
+        : ' · $linkedCount عملية شراء مرتبطة';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Surface(
+        child: Row(
+          children: [
+            const Icon(Icons.delete_outline, color: muted),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 4),
+                  Text(
+                    'حُذف في ${dateLabel(day)}$linked',
+                    style: const TextStyle(color: muted, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'استعادة',
+              onPressed: () async {
+                try {
+                  await store.restoreTrashEntry(entry['id'] as String);
+                  if (context.mounted) message(context, 'تمت استعادة العنصر');
+                } catch (error) {
+                  if (context.mounted) message(context, errorText(error));
+                }
+              },
+              icon: const Icon(Icons.restore_outlined, color: teal),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class Tools extends StatefulWidget {
   const Tools({super.key, required this.store});
   final Store store;
@@ -2174,6 +2340,12 @@ class _ToolsState extends State<Tools> {
             ),
             const SizedBox(height: 20),
             tool(
+              Icons.delete_sweep_outlined,
+              'سلة المحذوفات',
+              'استعد ما حذفته خلال 30 يومًا قبل حذفه تلقائيًا.',
+              () => page(context, TrashScreen(store: widget.store)),
+            ),
+            tool(
               Icons.backup_outlined,
               'حفظ نسخة احتياطية',
               'ملف ZIP واحد يشمل قاعدة البيانات وكل الصور.',
@@ -2263,7 +2435,7 @@ class _ToolsState extends State<Tools> {
                   ),
                   const SizedBox(height: 14),
                   const Text(
-                    'سعر البيع هو السعر الحالي الذي تحدده. آخر شراء يعتمد على تاريخ العملية، مع إبقاء التواريخ المجهولة غير مسجلة. الاتصال وواتساب اختياريان ويفتحان تطبيقات الهاتف.',
+                    'سعر البيع هو السعر الحالي الذي تحدده. آخر شراء يعتمد على تاريخ العملية، مع إبقاء التواريخ المجهولة غير مسجلة. الاتصال الهاتفي اختياري. لا توجد مزامنة سحابية في هذا الإصدار.',
                     style: TextStyle(color: muted, fontSize: 13, height: 1.8),
                   ),
                 ],
