@@ -7,7 +7,7 @@ permissions:
   contents: write
   actions: read
 concurrency:
-  group: verify-publish-daftar-1.0.1
+  group: verify-publish-daftar-1.0.2
   cancel-in-progress: false
 jobs:
   verify:
@@ -15,13 +15,13 @@ jobs:
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
-      VERIFIED_RUN_ID: '37807029098'
-      VERIFIED_SHA: '716032a60112d4d284eea026e3c301841006d307'
-      RELEASE_TAG: 'v1.0.1-cloud'
+      VERIFIED_RUN_ID: '37932060226'
+      VERIFIED_SHA: '4070c03aa066cd855fff3affc6058d3769aa0d84'
+      RELEASE_TAG: 'v1.0.2-cloud'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: '716032a60112d4d284eea026e3c301841006d307'
+          ref: '4070c03aa066cd855fff3affc6058d3769aa0d84'
           persist-credentials: false
       - name: Require successful app tests and verified compilation
         shell: bash
@@ -29,7 +29,7 @@ jobs:
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$VERIFIED_RUN_ID" > build-run.json
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$VERIFIED_RUN_ID/jobs" > build-jobs.json
-          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/11562734706" > build-artifact.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/11617370654" > build-artifact.json
           python3 - <<'PY'
           import json, os
           run = json.load(open("build-run.json"))
@@ -46,16 +46,16 @@ jobs:
                   raise SystemExit(f"Unexpected build: {key}={run.get(key)!r}")
           jobs = json.load(open("build-jobs.json"))["jobs"]
           required = {"Resolve, analyze and test", "Build and verify APK", "Upload compiled APK for diagnostics"}
-          job = next(j for j in jobs if j["id"] == 113413878783)
+          job = next(j for j in jobs if j["id"] == 113824944020)
           success = {s["name"] for s in job["steps"] if s["conclusion"] == "success"}
           if not required <= success:
               raise SystemExit("App compilation or tests failed")
           artifact = json.load(open("build-artifact.json"))
-          if artifact["id"] != 11562734706 or artifact["expired"] or artifact["name"] != "compiled-apk-awaiting-android-verification":
+          if artifact["id"] != 11617370654 or artifact["expired"] or artifact["name"] != "compiled-apk-awaiting-android-verification":
               raise SystemExit("Wrong or expired compiled artifact")
           if artifact["workflow_run"]["head_sha"] != os.environ["VERIFIED_SHA"]:
               raise SystemExit("Artifact source mismatch")
-          print("14 app tests, signature, version and no-INTERNET checks passed in source build")
+          print("16 app tests, signature, version and no-INTERNET checks passed in source build")
           PY
       - name: Download the same compiled APK and verify checksum
         shell: bash
@@ -63,7 +63,7 @@ jobs:
           gh run download "$VERIFIED_RUN_ID" --repo "$GITHUB_REPOSITORY" --name compiled-apk-awaiting-android-verification --dir deliverables
           sha256sum --check deliverables/SHA256.txt
           mkdir -p android_app/build/app/outputs/flutter-apk
-          cp deliverables/Daftar-Parts-1.0.1.apk android_app/build/app/outputs/flutter-apk/app-release.apk
+          cp deliverables/Daftar-Parts-1.0.2.apk android_app/build/app/outputs/flutter-apk/app-release.apk
           python3 -m py_compile android_app/ci/android_smoke.py
       - name: Prepare fresh cloud Android tools with retries
         shell: bash
@@ -115,7 +115,7 @@ jobs:
       - name: Upload verified installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: Daftar-Parts-1.0.1
+          name: Daftar-Parts-1.0.2
           path: deliverables/
           if-no-files-found: error
           retention-days: 7
@@ -133,13 +133,13 @@ jobs:
               raise SystemExit("Release tag already exists; inspect it before retrying")
           PY
           cat > release-notes.md <<EOF
-          دفتر القطع 1.0.1 — نسخة تجريبية جاهزة للتثبيت على Android 7 أو أحدث.
+          دفتر القطع 1.0.2 — نسخة تجريبية جاهزة للتثبيت على Android 7 أو أحدث.
 
           التطبيق مستقل: لا حساب، لا تسجيل دخول، ولا اتصال بالإنترنت مطلوب للاستخدام.
-          قاعدة SQLite والصور محفوظة على الهاتف. يشمل القطع والموردين والمشتريات
+          قاعدة SQLite والصور محفوظة على الهاتف. المزامنة السحابية مؤجلة. يشمل القطع والموردين والمشتريات
           والبحث والأسعار والسجل ونسخة ZIP كاملة واستيراد وتصدير CSV.
 
-          نجح 14 اختبارًا آليًا، وتم تشغيل هذا الملف وإعادة فتحه دون اتصال على Android 11.
+          نجح 16 اختبارًا آليًا، وتم تشغيل هذا الملف وإعادة فتحه دون اتصال على Android 11.
           المصدر: $VERIFIED_SHA
           بناء واختبارات التطبيق: https://github.com/$GITHUB_REPOSITORY/actions/runs/$VERIFIED_RUN_ID
           اختبار Android دون اتصال: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
@@ -147,7 +147,7 @@ jobs:
           الملف موقّع بمفتاح تجريبي جديد. إذا كانت النسخة القديمة مثبتة،
           احفظ نسخة احتياطية لأي بيانات تحتاجها قبل إزالة النسخة القديمة والتثبيت.
 
-          الكاميرا واختيار الملفات وواتساب تحتاج تجربة على هاتف فعلي.
+          الكاميرا واختيار الملفات تحتاج تجربة على هاتف فعلي. واتساب محذوف.
           EOF
-          gh release create "$RELEASE_TAG" deliverables/Daftar-Parts-1.0.1.apk deliverables/SHA256.txt deliverables/SIGNATURE.txt --repo "$GITHUB_REPOSITORY" --target "$VERIFIED_SHA" --draft --prerelease --title "دفتر القطع 1.0.1" --notes-file release-notes.md
+          gh release create "$RELEASE_TAG" deliverables/Daftar-Parts-1.0.2.apk deliverables/SHA256.txt deliverables/SIGNATURE.txt --repo "$GITHUB_REPOSITORY" --target "$VERIFIED_SHA" --draft --prerelease --title "دفتر القطع 1.0.2" --notes-file release-notes.md
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
