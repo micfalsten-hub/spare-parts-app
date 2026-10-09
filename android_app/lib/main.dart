@@ -2445,7 +2445,7 @@ class _ToolsState extends State<Tools> {
                   section(
                     context,
                     'معلومات الدفتر',
-                    'الإصدار 1.0.1 · العملة: الجنيه المصري',
+                    'الإصدار 1.0.2 · العملة: الجنيه المصري',
                   ),
                   const SizedBox(height: 14),
                   const Text(
