@@ -1,0 +1,78 @@
+name: Diagnose Android 15 APK compatibility
+on:
+  push:
+    branches: [codex/honor-android15-check]
+    paths: [.github/workflows/android-15-compat.yml]
+permissions:
+  contents: read
+jobs:
+  install:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: google_apis
+            expected_page_size: "4096"
+          - image: google_apis_ps16k
+            expected_page_size: "16384"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Prepare Android 15 emulator
+        shell: bash
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          set +o pipefail
+          yes | sdkmanager --licenses >/dev/null
+          set -o pipefail
+          for attempt in 1 2 3; do
+            if sdkmanager --install emulator platform-tools "platforms;android-35" "system-images;android-35;${ matrix.image }};x86_64" "build-tools;37.0.0"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep 5
+          done
+          mkdir -p android_app/build/app/outputs/flutter-apk
+          mkdir -p deliverables
+          curl --fail --location --retry 3 "https://github.com/$GITHUB_REPOSITORY/releases/download/v1.0.2-cloud/Daftar-Parts-1.0.2.apk" -o deliverables/Daftar-Parts-1.0.2.apk
+          curl --fail --location --retry 3 "https://github.com/$GITHUB_REPOSITORY/releases/download/v1.0.2-cloud/SHA256.txt" -o deliverables/SHA256.txt
+          cd deliverables
+          sha256sum --check SHA256.txt
+          cd ..
+          "$ANDROID_HOME/build-tools/37.0.0/zipalign" -c -P 16 -v 4 deliverables/Daftar-Parts-1.0.2.apk
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose deliverables/Daftar-Parts-1.0.2.apk
+          cp deliverables/Daftar-Parts-1.0.2.apk android_app/build/app/outputs/flutter-apk/app-release.apk
+      - name: Enable emulator acceleration
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install and launch exact release APK on Android 15
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 35
+          arch: x86_64
+          target: ${ matrix.image }}
+          ram-size: "3072"
+          emulator-boot-timeout: 600
+          emulator-options: -no-window -gpu swiftshader_indirect -memory 3072 -no-snapshot -noaudio -no-boot-anim
+          working-directory: android_app
+          script: |
+            actual="$(adb shell getconf PAGE_SIZE | tr -d '\r')"
+            echo "Emulator page size: $actual"
+            test "$actual" = "${ matrix.expected_page_size }}"
+            adb install -r build/app/outputs/flutter-apk/app-release.apk
+            python3 ci/android_smoke.py
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-15-${ matrix.image }}-diagnostics
+          path: android_app/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
