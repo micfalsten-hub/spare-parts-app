@@ -60,7 +60,13 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -memory 3072 -no-snapshot -noaudio -no-boot-anim
           working-directory: android_app
           script: |
-            actual="$(adb shell getconf PAGE_SIZE | tr -d '\r')"
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              adb wait-for-device
+              actual="$(adb shell getconf PAGE_SIZE 2>/dev/null | tr -d '\r')"
+              if [ "$actual" = "${{ matrix.expected_page_size }}" ]; then break; fi
+              echo "Waiting for emulator shell; page size was '$actual'"
+              sleep 3
+            done
             echo "Emulator page size: $actual"
             test "$actual" = "${{ matrix.expected_page_size }}"
             adb install -r build/app/outputs/flutter-apk/app-release.apk
