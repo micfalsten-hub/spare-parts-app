@@ -410,7 +410,7 @@ class Store extends ChangeNotifier {
         // Skip a damaged optional trash photo reference.
       }
     }
-  });
+  }
 
   Future<void> savePurchase(DbRow row, {int? sellingPrice}) => _write(() async {
     final value = Map<String, Object?>.from(row);
