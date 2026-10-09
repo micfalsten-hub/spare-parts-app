@@ -39,9 +39,7 @@ jobs:
           mkdir -p deliverables
           curl --fail --location --retry 3 "https://github.com/$GITHUB_REPOSITORY/releases/download/v1.0.2-cloud/Daftar-Parts-1.0.2.apk" -o deliverables/Daftar-Parts-1.0.2.apk
           curl --fail --location --retry 3 "https://github.com/$GITHUB_REPOSITORY/releases/download/v1.0.2-cloud/SHA256.txt" -o deliverables/SHA256.txt
-          cd deliverables
-          sha256sum --check SHA256.txt
-          cd ..
+          sha256sum --check deliverables/SHA256.txt
           "$ANDROID_HOME/build-tools/37.0.0/zipalign" -c -P 16 -v 4 deliverables/Daftar-Parts-1.0.2.apk
           "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose deliverables/Daftar-Parts-1.0.2.apk
           cp deliverables/Daftar-Parts-1.0.2.apk android_app/build/app/outputs/flutter-apk/app-release.apk
