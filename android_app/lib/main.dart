@@ -2131,7 +2131,9 @@ class TrashScreen extends StatelessWidget {
                     title: 'إفراغ سلة المحذوفات؟',
                     details: 'لن يمكن استعادة العناصر بعد إفراغ السلة.',
                   );
-                  if (!accepted) return;
+                  if (!accepted) {
+                    return;
+                  }
                   await store.emptyTrash();
                   if (context.mounted) {
                     message(context, 'تم إفراغ السلة');
